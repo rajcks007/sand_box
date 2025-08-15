@@ -70,7 +70,7 @@ int main(void) {
     int *p = &x;
     printf("x=%d\n", x);            // 42
     printf("&x=%d\n", (void*)&x);   // address of x
-    printf("p=%d\n", (void*)p);     // value stored in p (address)
+    printf("p=%d\n", (void*)p);     // value stored in p (address of x)
     printf("*p=%d\n", *p);          // value pointed to by p [42 (dereference pointer)]
     *p = 100;                       // change value through pointer
     printf("x=%d\n", x);            // 100
@@ -87,7 +87,7 @@ int main(void) {
 int main(void) {
     uint8_t  arr[4] = {10, 20, 30, 40};
     uint8_t  *p = arr;                 // points to first element
-    printf("arr[0]=%d", arr[0])
+    printf("arr[0]=%d", arr[0]);
     printf("%u\n", *p);       // 1
     printf("%u\n", *(p + 1)); // 2
     printf("%u\n", *(p + 2)); // 3
@@ -200,23 +200,6 @@ int main(void) {
 Depending on alignment rules, there may be padding bytes — this matters in embedded systems because it changes how data is read/written to hardware or sent over communication protocols.
 
 ### e.g. Memory layout, alignment & padding
-```c
-#include <stdio.h>
-#include <stdint.h>
-#include <stdalign.h>
-
-struct A { uint8_t a; uint32_t b; uint8_t c; }; // likely padding after a and at end
-struct B { uint32_t b; uint8_t a; uint8_t c; }; // better packing by ordering
-
-int main(void) {
-    printf("alignof(uint32_t)=%zu\n", alignof(uint32_t));
-    printf("sizeof(struct A)=%zu\n", sizeof(struct A));
-    printf("sizeof(struct B)=%zu\n", sizeof(struct B));
-    return 0;
-}
-```
-
-### Memory layout, alignment & padding
 ```c
 #include <stdio.h>
 #include <stdint.h>
