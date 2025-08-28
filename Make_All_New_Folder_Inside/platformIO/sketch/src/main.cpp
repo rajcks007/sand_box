@@ -1,11 +1,16 @@
 // language reference link : https://www.arduino.cc/reference/en/
+#include <stdint.h>
+#include <Arduino.h>
+#include <Wire.h>
+#include <math.h>
+#include "Adafruit_TCS34725.h"
 
 // code for target board : Arduino Zero
-// project : RawSAS test bench
-// last change : Augest 21,2025
+// project : BiDiLTE test bench
+// last change : Aug 27,2025
 
-#include <Arduino.h>
-#include <math.h>
+/* Global color sensor object (I2C) */
+Adafruit_TCS34725 tcs(TCS34725_INTEGRATIONTIME_154MS, TCS34725_GAIN_4X);
 
 /* USAGE OF OUTPUT PWM WITH THE BUZZER FUNCTION  */
 const int speakerDuration = 4000;     // 4 seconds tone duration on pin 7
@@ -15,11 +20,11 @@ const int tone_freq700 = 700;
 
 /* PORTS CONFIGURATION ON THE TARGET BOARD */
 const int WakeUp_Out = 2;             // pin 2 : input from sensor - wakeup line
-const int Relay4 = 3;                 // pin 3 : control of relay4 for output from sensor - TX line
-const int Relay3 = 4;                 // pin 4 : control of relay3 for input of sensor - RX line
-const int Relay2 = 7;                 // pin 5 : control of relay2 for power supply depletion with 1kohm
-const int Relay1 = 6;                 // pin 6 : control of relay1 for main power supply ON OFF with 3.3v from PPK2
-const int speakerOut = 5;             // pin 7  : output pin to speaker to generate audio tone
+const int Relay4 = 7;                 // pin 3 : control of relay4 for output from sensor - TX line
+const int Relay3 = 6;                 // pin 4 : control of relay3 for input of sensor - RX line
+const int Relay2 = 4;                 // pin 5 : control of relay2 for power supply depletion with 1kohm
+const int Relay1 = 3;                 // pin 6 : control of relay1 for main power supply ON OFF with 3.3v from PPK2
+const int speakerOut = 5;             // pin 8  : output pin to speaker to generate audio tone
 const int Busy_In = 8;                // pin 8 : output from sensor - busy line
 const int Alarm_In = 9;               // pin 9 : output from sensor - alarm line
 const int GWBusy_Out = 10;            // pin 10 : input from sensor - GW Busy line
@@ -31,8 +36,8 @@ unsigned char subCommand;             // decoded received command from computer
 unsigned char value;                  // digital input read buffer
 
 /* AUDIO PARTS GENERATION : SINUS WAVE */
-volatile unsigned int sIndex;                  //Tracks sinewave points in array
-const unsigned int SAMPLECOUNT = 70;  // Number of samples to read in block
+volatile uint16_t sIndex;                  //Tracks sinewave points in array
+const uint16_t SAMPLECOUNT = 70;  // Number of samples to read in block
 int *wavSamples;                      //aray to store sinewave points
 uint32_t sampleRate = 20000;          //sample rate of the sine wave
 // 600Hz = param sampleCount = 35 & sampleRate = 20000
@@ -61,29 +66,41 @@ const uint32_t SAMPLER_9 = 63000;   // 905 Hz
 const uint32_t SAMPLER_10 = 70000;   // 1005 Hz
 const uint32_t SAMPLER_11 = 77000;   // 1104 Hz
 
-
-// --- Forward declarations (prototypes) ---
+/* ---------- Function prototypes (forward declarations) ---------- */
 void genSin(int sCount, int div);
-void tcConfigure(int sampleRate);
+void tcConfigure(uint32_t sampleRate);
 bool tcIsSyncing();
 void tcStartCounter();
 void tcReset();
 void tcDisable();
 void TC5_Handler(void);
+// ---- ADC helper prototypes ----
+float readVoltage(uint8_t pin);
+int readADCAverage(uint8_t pin);
+float readVminus();
+float readVplus();
+float readADC_PEGEL();
+float readADC_FFT();
 
+// ---- Color helper prototypes ----
+void readColor(float &r, float &g, float &b);
+bool isRed();
+bool isGreen();
+bool isBlue();
+/* ---------------------------------------------------------------- */
 
 void setup() {
   // setup pins for power control of target board
   pinMode(WakeUp_Out, OUTPUT);        // use for power on/off the target board  (commands 0,1)
   digitalWrite(WakeUp_Out, LOW);      // startup with target board OFF
   pinMode(Relay4, OUTPUT);            // use for FTDI separation of TX line (commands 2,3)
-  digitalWrite(Relay4, HIGH);         // startup with line open
+  digitalWrite(Relay4, LOW);         // startup with line open
   pinMode(Relay3, OUTPUT);            // use for FTDI separation of RX line (commands 2,3)
-  digitalWrite(Relay3, HIGH);         // startup with line open
+  digitalWrite(Relay3, LOW);         // startup with line open
   pinMode(Relay2, OUTPUT);            // use for vcc capacitor depletion (commands 8,9)
-  digitalWrite(Relay2, HIGH);         // startup with line open (no depletion)
+  digitalWrite(Relay2, LOW);         // startup with line open (no depletion)
   pinMode(Relay1, OUTPUT);            // use for vcc main line power on/off (command 16,17)
-  digitalWrite(Relay1, HIGH);         // startup with line open (vcc not provided to target PCBA)
+  digitalWrite(Relay1, LOW);         // startup with line open (vcc not provided to target PCBA)
   pinMode(Busy_In, INPUT);            // input reading from sensor into arduino (commands 6)
   pinMode(Alarm_In, INPUT);           // input reading from sensor into arduino (commands 7)
   pinMode(GWBusy_Out, OUTPUT);        // use for signaling GW busy to sensor  (commands 4,5)
@@ -91,13 +108,26 @@ void setup() {
   pinMode(speakerOut, OUTPUT);        // setup pin for the buzzer (command 10,11,12,13)
   InOutState = 0b011110;              // init global variable as the default digitalWrite settings for each port
 
+  // Make sure these analog inputs are configured if you use them
+  pinMode(A1, INPUT);
+  pinMode(A2, INPUT);
+  pinMode(A3, INPUT);
+  pinMode(A4, INPUT);
+
   Serial.begin(115200);               // setup UART commmunication to the computer (python program for commands)
 
   analogWriteResolution(10);          //set the Arduino DAC for 10 bits of resolution (max)
+  analogReadResolution(12);           //set the Arduino ADC for 12 bits of resolution (max)
   wavSamples = (int *) malloc(SAMPLECOUNT * sizeof(int));     // Allocate the buffer where the samples are stored
   genSin(SAMPLECOUNT, DIVIDER_1);                //function generates sine wave
   sIndex = 0;   //Set to zero to start from beginning of waveform
   tcConfigure(sampleRate); //setup the timer counter based off of the user entered sample rate
+
+  // Initialize the TCS34725 color sensor (I2C on SDA/SCL pins)
+  if (!tcs.begin()) {
+    Serial.println("No TCS34725 found ... check your connections.");
+    while (1) { delay(10); }   // halt if sensor is missing
+  }
 }
 
 void loop() {
@@ -153,12 +183,12 @@ void loop() {
           Serial.println("Alarm ON");
         break;
       case 8:   // start deplete VCC
-        digitalWrite(Relay2, LOW);
+        digitalWrite(Relay2, HIGH);
         Serial.println("Depletion ON");
         InOutState = InOutState & 0b111101;
         break;
       case 9:   // stop deplete VCC
-        digitalWrite(Relay2, HIGH);
+        digitalWrite(Relay2, LOW);
         Serial.println("Depletion OFF");
         InOutState = InOutState | 0b000010;
         break;
@@ -278,12 +308,12 @@ void loop() {
       //  Serial.println("Sound OFF");
       //  break;
       case 16:    // VCC close to target PCBA
-        digitalWrite(Relay1, LOW);
+        digitalWrite(Relay1, HIGH);
         Serial.println("Power ON");
         InOutState = InOutState & 0b111110;
         break;
       case 17:    // VCC opened to target PCBA
-        digitalWrite(Relay1, HIGH);
+        digitalWrite(Relay1, LOW);
         Serial.println("Power OFF");
         InOutState = InOutState | 0b000001;
         break;
@@ -299,6 +329,43 @@ void loop() {
         tcConfigure(sampleRate);      // restart the sinus output on port A0
         Serial.println("Sinus ON");
         break;
+      case 30:    // Read Vplus (ADC on A4)
+        Serial.print("Vplus ADC = ");
+        Serial.println(readVplus());
+        break;
+      case 31:    // Read Vminus (ADC on A3)
+        Serial.print("Vminus ADC = ");
+        Serial.println(readVminus());
+        break;
+      case 32:    // Read PEGEL (ADC on A1)
+        Serial.print("PEGEL ADC = ");
+        Serial.println(readADC_PEGEL());
+        break;
+      case 33:    // Read FFT (ADC on A2)
+        Serial.print("FFT ADC = ");
+        Serial.println(readADC_FFT());
+        break;
+      case 34:    // Color detection
+        if (isRed()) {
+          Serial.println("Detected: RED");
+        } else if (isGreen()) {
+          Serial.println("Detected: GREEN");
+        } else if (isBlue()) {
+          Serial.println("Detected: BLUE");
+        } else {
+          Serial.println("Detected: UNKNOWN");
+        }
+        break;
+      case 35:    // Read full normalized RGB values
+        {
+          float r, g, b;
+          readColor(r, g, b);
+          Serial.print("RGB(norm 0-256): ");
+          Serial.print(r); Serial.print(", ");
+          Serial.print(g); Serial.print(", ");
+          Serial.println(b);
+        }
+        break;
       default:        // always return unknowed command from computer (help for debug)
         Serial.println("Unknown");
         break;
@@ -309,20 +376,21 @@ void loop() {
 // This function generates a sine wave and stores it in the wavSamples array
 // The input argument is the number of points the sine wave is made up of
 void genSin(int sCount, int div) {
-  const float pi2 = 6.283f; // 2 * pi
-  float in;
-
-  for (int i = 0; i < sCount; i++) {
-    in = pi2 * (1.0f / (float)sCount) * (float)i;
-    // 511.5 = 1023 / 2 for 10-bit DAC midpoint
-    wavSamples[i] = (int)((sinf(in) * 511.5f + 511.5f) / div);
-  }
+ const float pi2 = 6.283; //2 x pi
+ float in; 
+ 
+ for(int i=0; i<sCount;i++)
+ { // loop to build sine wave based on sample count
+   in = pi2*(1/(float)sCount)*(float)i;               // calculate value in radians for sin()
+   // HERE it is possible to divide the amplitude of the waveform   /1 /2 /4
+   wavSamples[i] = ((int)(sin(in)*511.5 + 511.5)/div);  // Calculate sine wave value and offset based on DAC resolution 511.5 = 1023/2
+ }
 }
 
 // Configures the TC to generate output events at the sample frequency.
 // Configures the TC in Frequency Generation mode, with an event output once
 // each time the audio sample frequency period expires.
- void tcConfigure(int sampleRate)
+void tcConfigure(uint32_t sampleRate)
 {
  // Enable GCLK for TCC2 and TC5 (timer counter input clock)
  GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5)) ;
@@ -378,5 +446,44 @@ void TC5_Handler (void)
   }
   tcStartCounter();          // start timer, once timer is done interrupt will occur and DAC value will be updated 
 }
+
+float readVoltage(uint8_t pin) {
+  int raw = readADCAverage(pin);
+  float voltage = (raw * 3.3) / 4095.0;   // if 12-bit resolution
+  return voltage;
+}
+
+// --------- ADC helpers ---------
+int readADCAverage(uint8_t pin) {
+  long sum = 0;
+  for (int i = 0; i < 1000; i++) {
+    sum += analogRead(pin);
+  }
+  // SerialUSB.println((int)(sum / 1000));
+  return (int)(sum / 1000);
+}
+
+// Named channels (change pins to match your wiring as needed)
+float readVminus()     { return readVoltage(A3); }
+float readVplus()      { return readVoltage(A4); }
+float readADC_PEGEL()  { return readVoltage(A1); }
+float readADC_FFT()    { return readVoltage(A2); }
+
+// --------- Color helpers ---------
+void readColor(float &r, float &g, float &b) {
+  uint16_t clear, red, green, blue;
+  tcs.getRawData(&red, &green, &blue, &clear);
+
+  uint32_t sum = clear;
+  if (sum == 0) sum = 1;     // prevent div/0
+
+  r = (float)red   / sum * 256.0f;
+  g = (float)green / sum * 256.0f;
+  b = (float)blue  / sum * 256.0f;
+}
+
+bool isRed()   { float r,g,b; readColor(r,g,b); return (r > g && r > b); }
+bool isGreen() { float r,g,b; readColor(r,g,b); return (g > r && g > b); }
+bool isBlue()  { float r,g,b; readColor(r,g,b); return (b > r && b > g); }
 
 // End of file
