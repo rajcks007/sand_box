@@ -456,16 +456,16 @@ float readVoltage(uint8_t pin) {
 // --------- ADC helpers ---------
 int readADCAverage(uint8_t pin) {
   long sum = 0;
-  for (int i = 0; i < 1000; i++) {
+  for (int i = 0; i < 100; i++) {
     sum += analogRead(pin);
   }
-  // SerialUSB.println((int)(sum / 1000));
-  return (int)(sum / 1000);
+  // SerialUSB.println((int)(sum / 100));
+  return (int)(sum / 100);
 }
 
 // Named channels (change pins to match your wiring as needed)
 float readVminus()     { return readVoltage(A3); }
-float readVplus()      { return readVoltage(A4); }
+float readVplus()      { return readVoltage(A5); }
 float readADC_PEGEL()  { return readVoltage(A1); }
 float readADC_FFT()    { return readVoltage(A2); }
 
